@@ -1,6 +1,5 @@
 package main
 
-// JikanResponse represents the necessary part of the Jikan API response
 type JikanResponse struct {
 	Data []struct {
 		MALID  int `json:"mal_id"`
@@ -37,8 +36,6 @@ type Metadata struct {
 	MalID     int
 	Episodes  []EpisodeMetadata `json:"episodes,omitempty"`
 }
-
-// Models adapted for Wails/Frontend
 
 type Anime struct {
 	Name      string `json:"name"`

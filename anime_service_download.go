@@ -21,7 +21,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// GetDownloads returns a map of anime name to list of downloaded episode numbers
 func (a *AnimeService) GetDownloads() (map[string][]string, error) {
 	downloads := make(map[string][]string)
 	entries, err := os.ReadDir(a.downloadsDir)
@@ -50,10 +49,8 @@ func (a *AnimeService) GetDownloads() (map[string][]string, error) {
 	return downloads, nil
 }
 
-// CheckDownloadStatus returns true if an episode is fully downloaded
 func (a *AnimeService) CheckDownloadStatus(animeName, epNumStr string) bool {
 	epDir := a.getEpisodeDir(animeName, epNumStr)
-	// Check for the remuxed mp4 first, then fallback to other markers
 	if _, err := os.Stat(filepath.Join(epDir, "episode.mp4")); err == nil {
 		return true
 	}
@@ -61,13 +58,11 @@ func (a *AnimeService) CheckDownloadStatus(animeName, epNumStr string) bool {
 	return err == nil
 }
 
-// DeleteDownload removes downloaded files for an episode
 func (a *AnimeService) DeleteDownload(animeName, epNumStr string) error {
 	epDir := a.getEpisodeDir(animeName, epNumStr)
 	return os.RemoveAll(epDir)
 }
 
-// GetActiveDownloads returns currently active downloads and their progress
 func (a *AnimeService) GetActiveDownloads() map[string]int {
 	active := make(map[string]int)
 	a.progressMap.Range(func(key, value interface{}) bool {
@@ -77,12 +72,10 @@ func (a *AnimeService) GetActiveDownloads() map[string]int {
 	return active
 }
 
-// DownloadEpisode downloads all segments of an episode
 func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumStr, epURL string, epNum float64, isDub bool) error {
 	key := animeName + ":" + epNumStr
 	fmt.Printf("Starting download: %s\n", key)
 
-	// Emit initial 0% progress
 	runtime.EventsEmit(a.ctx, "download-progress", map[string]interface{}{
 		"key":       key,
 		"animeName": animeName,
@@ -90,7 +83,6 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 		"progress":  0,
 	})
 
-	// Cancellation setup
 	a.cancelMutex.Lock()
 	if _, exists := a.cancelFuncs[key]; exists {
 		a.cancelMutex.Unlock()
@@ -107,10 +99,6 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 		a.progressMap.Delete(key)
 	}()
 
-	// 1. Get stream info
-	fmt.Printf("[%s] Getting stream URL for %s\n", key, epURL)
-
-	// For downloading, we ALWAYS want the raw stream URL
 	rawURL, headers, err := a.ResolveStreamURL(animeName, animeURL, animeSource, epNumStr, epURL, epNum, isDub)
 	if err != nil {
 		fmt.Printf("[%s] Error resolving raw stream URL: %v\n", key, err)
@@ -120,11 +108,9 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 
 	epDir := a.getEpisodeDir(animeName, epNumStr)
 	if err := os.MkdirAll(epDir, 0755); err != nil {
-		fmt.Printf("[%s] Error creating directory %s: %v\n", key, epDir, err)
 		return err
 	}
 
-	// 2. Fetch media playlist (follow master if needed) or detect direct download
 	var rawContent string
 	var segmentURLs []string
 	maxFollow := 3
@@ -203,13 +189,12 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 		return fmt.Errorf("no segments found")
 	}
 
-	// 3. Download segments
 	totalSegments := len(segmentURLs)
 	fmt.Printf("[%s] Collected %d segments\n", key, totalSegments)
 	var downloadedCount int32
 	errChan := make(chan error, 1)
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5) // max 5 concurrent downloads
+	sem := make(chan struct{}, 5)
 
 	updateProgress := func() {
 		newCount := atomic.AddInt32(&downloadedCount, 1)
@@ -234,25 +219,22 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 		go func(target string, idx int) {
 			defer wg.Done()
 			sem <- struct{}{}
-			// Hashing the URL for the filename
 			ext := getUrlExtension(target)
 			hash := sha256.Sum256([]byte(target))
 			filename := hex.EncodeToString(hash[:]) + ext
 
 			searchPaths := []string{
 				filepath.Join(epDir, filename),
-				filepath.Join(a.downloadsDir, filename), // Legacy flat structure
+				filepath.Join(a.downloadsDir, filename), // Legacy flat structure support
 				filepath.Join(a.cacheDir, filename),
 			}
 
 			defer func() { <-sem }()
 
-			// Check if segment already exists in any of the search paths
 			for _, p := range searchPaths {
 				if info, err := os.Stat(p); err == nil && info.Size() > 0 {
-					// Segment found, use it
 					updateProgress()
-					return // Segment already downloaded, skip
+					return
 				}
 			}
 
@@ -288,7 +270,6 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 
 	wg.Wait()
 
-	// 4. Register segments list for metadata and manifest
 	var fileList []string
 	for _, sURL := range segmentURLs {
 		ext := getUrlExtension(sURL)
@@ -296,36 +277,28 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 		fileList = append(fileList, hex.EncodeToString(hash[:])+ext)
 	}
 
-	// 5. Save metadata and local playlist
 	if rawContent != "" {
 		localPlaylistPath := filepath.Join(epDir, "index.m3u8")
-		if err := os.WriteFile(localPlaylistPath, []byte(rawContent), 0644); err != nil {
-			fmt.Printf("[%s] Warning: failed to save local playlist: %v\n", key, err)
-		} else {
+		if err := os.WriteFile(localPlaylistPath, []byte(rawContent), 0644); err == nil {
 			fmt.Printf("[%s] Saved local playlist: %s\n", key, localPlaylistPath)
 		}
 	}
 
-	// 6. POST-PROCESSING: REMUX TO MP4
 	fmt.Printf("[%s] Starting post-processing (Remux to MP4)...\n", key)
 	mp4Path := filepath.Join(epDir, "episode.mp4")
 
 	if rawContent != "" {
-		// HLS: merge segments using a LOCAL index.m3u8 to avoid network requests in ffmpeg
+		// Local index avoids network requests in FFmpeg during remux
 		content := a.generateLocalM3U8(fileList)
 		localM3U8Path := filepath.Join(epDir, "local_index.m3u8")
 		os.WriteFile(localM3U8Path, []byte(content), 0644)
 
 		cmd := exec.CommandContext(ctx, "ffmpeg", "-i", localM3U8Path, "-c", "copy", "-y", mp4Path)
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("[%s] Warning: FFmpeg HLS remux failed: %v\n", key, err)
-		} else {
+		if err := cmd.Run(); err == nil {
 			fmt.Printf("[%s] Successfully remuxed HLS to MP4: %s\n", key, mp4Path)
-			// Cleanup original files to save space
 			a.CleanupHLSFiles(epDir, fileList)
 		}
 	} else if totalSegments == 1 {
-		// Single file: remux to mp4 if it's .ts
 		ext := getUrlExtension(segmentURLs[0])
 		if strings.ToLower(ext) == ".ts" {
 			hash := sha256.Sum256([]byte(segmentURLs[0]))
@@ -333,11 +306,8 @@ func (a *AnimeService) DownloadEpisode(animeName, animeURL, animeSource, epNumSt
 			tsPath := filepath.Join(epDir, filename)
 
 			cmd := exec.CommandContext(ctx, "ffmpeg", "-i", tsPath, "-c", "copy", "-y", mp4Path)
-			if err := cmd.Run(); err != nil {
-				fmt.Printf("[%s] Warning: FFmpeg single TS remux failed: %v\n", key, err)
-			} else {
+			if err := cmd.Run(); err == nil {
 				fmt.Printf("[%s] Successfully remuxed TS to MP4: %s\n", key, mp4Path)
-				// Cleanup original TS file
 				os.Remove(tsPath)
 			}
 		}

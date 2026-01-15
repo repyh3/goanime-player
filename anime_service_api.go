@@ -19,12 +19,10 @@ import (
 	"github.com/alvarorichard/Goanime/pkg/goanime/types"
 )
 
-// Search searches for anime and enriches with high-quality covers
 func (a *AnimeService) Search(query string) ([]Anime, error) {
 	fmt.Printf("Searching for: %s\n", query)
 	gaAnimes, err := a.client.SearchAnime(query, nil)
 	if err != nil {
-		// If it's a "no anime found" error, return empty slice instead of system error
 		if strings.Contains(err.Error(), "no anime found") {
 			return []Anime{}, nil
 		}
@@ -33,8 +31,6 @@ func (a *AnimeService) Search(query string) ([]Anime, error) {
 
 	results := mapAnimeList(gaAnimes)
 
-	// Enrich with better images and synopsis from Jikan concurrently
-	// Limit to top 10 results to avoid heavy rate limiting and long waits
 	limit := len(results)
 	if limit > 10 {
 		limit = 10
@@ -60,8 +56,6 @@ func (a *AnimeService) Search(query string) ([]Anime, error) {
 	}
 	wg.Wait()
 
-	// Post-search sorting: Re-rank results by similarity to user query
-	// This helps with "The Quintessential Quintuplets" case by pushing exact/close matches to top
 	sort.Slice(results, func(i, j int) bool {
 		scoreI := calculateSimilarity(query, results[i].Name)
 		scoreJ := calculateSimilarity(query, results[j].Name)
@@ -71,15 +65,10 @@ func (a *AnimeService) Search(query string) ([]Anime, error) {
 	return results, nil
 }
 
-// GetEpisodeMetadata fetches specific metadata for an episode (on-demand)
 func (a *AnimeService) GetEpisodeMetadata(malID int, epNum int) (*EpisodeMetadata, error) {
 	fmt.Printf("Fetching metadata for MAL ID: %d, Episode: %d\n", malID, epNum)
 
-	// Check cache first (using actual MalID key if possible or iterating)
 	cacheMutex.RLock()
-	// Optimization: If the MalID is used as a key in the map (it often is for Jikan searches)
-	// we should try direct lookup, but the map keys are currently strings (cleaned titles).
-	// So we still need to iterate or fix the keying.
 	for _, v := range metadataCache {
 		if v.MalID == malID {
 			for _, ep := range v.Episodes {
@@ -92,7 +81,6 @@ func (a *AnimeService) GetEpisodeMetadata(malID int, epNum int) (*EpisodeMetadat
 	}
 	cacheMutex.RUnlock()
 
-	// Fetch from Jikan
 	epURL := fmt.Sprintf("https://api.jikan.moe/v4/anime/%d/episodes/%d", malID, epNum)
 	resp, err := throttledGet(epURL)
 	if err != nil || resp == nil {
@@ -111,7 +99,6 @@ func (a *AnimeService) GetEpisodeMetadata(malID int, epNum int) (*EpisodeMetadat
 		return nil, err
 	}
 
-	// Update cache for ALL entries sharing this MalID (fixes "bleeding" / missing updates)
 	cacheMutex.Lock()
 	for k, v := range metadataCache {
 		if v.MalID == malID {
@@ -174,24 +161,18 @@ func (a *AnimeService) fetchFullMetadata(malID int) (*Metadata, error) {
 	return &v, nil
 }
 
-// GetStreamUrl fetches a stream URL and registers it with the proxy for the frontend
 func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, epURL string, epNum float64, isDub bool) (*StreamInfo, error) {
 	resURL, headers, err := a.ResolveStreamURL(animeName, animeURL, animeSource, epNumStr, epURL, epNum, isDub)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine if HLS based on extension
 	isHLS := strings.Contains(strings.ToLower(resURL), ".m3u8")
-	// OFFLINE OVERRIDE: Check for local files
 	epDir := a.getEpisodeDir(animeName, epNumStr)
 	if _, err := os.Stat(filepath.Join(epDir, "episode.mp4")); err == nil {
-		// If we have a remuxed MP4, it's NOT HLS anymore
 		isHLS = false
 	} else if _, err := os.Stat(filepath.Join(epDir, "index.m3u8")); err == nil {
-		// If we have an HLS playlist, it IS HLS
 		isHLS = true
-		// BACKGROUND UPGRADE: Trigger conversion to MP4 for existing HLS downloads
 		go func() {
 			manifestPath := filepath.Join(epDir, "manifest.json")
 			mBytes, err := os.ReadFile(manifestPath)
@@ -214,19 +195,14 @@ func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, 
 			}
 		}()
 	} else if a.CheckDownloadStatus(animeName, epNumStr) {
-		// If it's a single .ts file download, force HLS (fallback for single files not yet remuxed)
 		if getUrlExtension(resURL) == ".ts" {
 			isHLS = true
-			// BACKGROUND UPGRADE: Trigger conversion for single TS file
-			// We need to find the hashed filename... or we can just let proxy handle it for now
-			// Actually, let's keep it simple. New downloads will have episode.mp4.
 		}
 	}
 
 	id := strconv.FormatInt(time.Now().UnixNano(), 10)
 	proxyURL := fmt.Sprintf("http://localhost:%s/proxy?id=%s", a.proxyPort, id)
 
-	// Register with proxy early
 	a.proxyMutex.Lock()
 	a.proxyCache[id] = &StreamInfo{
 		URL:        resURL,
@@ -237,7 +213,6 @@ func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, 
 	}
 	a.proxyMutex.Unlock()
 
-	// If already downloaded, return immediately (skips remote quality check)
 	if a.CheckDownloadStatus(animeName, epNumStr) {
 		fmt.Printf("[%s] Found downloaded content, serving via proxy: %s\n", animeName, proxyURL)
 		return &StreamInfo{
@@ -250,7 +225,6 @@ func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, 
 		}, nil
 	}
 
-	// Optional: Fetch master playlist to select highest quality for STREAMING too
 	if isHLS {
 		req, _ := http.NewRequest("GET", resURL, nil)
 		for k, v := range headers {
@@ -270,7 +244,6 @@ func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, 
 						resURL = variantURL.String()
 						fmt.Printf("Selected highest quality variant for streaming: %s\n", resURL)
 
-						// Update proxy cache with specific variant
 						a.proxyMutex.Lock()
 						a.proxyCache[id].URL = resURL
 						a.proxyMutex.Unlock()
@@ -289,9 +262,7 @@ func (a *AnimeService) GetStreamUrl(animeName, animeURL, animeSource, epNumStr, 
 	}, nil
 }
 
-// ResolveStreamURL gets the RAW stream URL and headers (internal helper)
 func (a *AnimeService) ResolveStreamURL(animeName, animeURL, animeSource, epNumStr, epURL string, epNum float64, isDub bool) (string, map[string]string, error) {
-	// OFFLINE SUPPORT: Check if metadata already exists
 	epDir := a.getEpisodeDir(animeName, epNumStr)
 	metadataPath := filepath.Join(epDir, "stream_metadata.json")
 
@@ -369,14 +340,10 @@ func mapEpisodeList(src []*types.Episode) []Episode {
 	return out
 }
 
-// Helpers
-
-// throttledGet performs a GET request with rate limiting and retries
 func throttledGet(url string) (*http.Response, error) {
 	jikanMutex.Lock()
 
 	// Jikan API allows 3 requests per second for public API
-	// We'll be conservative and wait 1 second between requests
 	elapsed := time.Since(lastJikanRequest)
 	if elapsed < time.Second {
 		time.Sleep(time.Second - elapsed)
@@ -385,7 +352,6 @@ func throttledGet(url string) (*http.Response, error) {
 	var resp *http.Response
 	var err error
 
-	// Retry logic with exponential backoff
 	backoff := time.Second
 	for i := 0; i < 3; i++ {
 		resp, err = httpClient.Get(url)
@@ -413,7 +379,6 @@ func throttledGet(url string) (*http.Response, error) {
 			continue
 		}
 
-		// If not 200 and not 429, don't retry
 		break
 	}
 
@@ -453,13 +418,10 @@ func fetchAnimeMetadata(title string) (string, string, int) {
 	}
 
 	if len(jikan.Data) > 0 {
-		// Pick the best match among the top 5 results
 		bestIdx := 0
 		maxSimilarity := -1
 		for i, data := range jikan.Data {
-			// Compare cleaned titles
 			sim := calculateSimilarity(cleaned, data.Title)
-			// Also check English title if available
 			if data.TitleEnglish != "" {
 				if engSim := calculateSimilarity(cleaned, data.TitleEnglish); engSim > sim {
 					sim = engSim

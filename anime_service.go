@@ -22,11 +22,10 @@ var (
 	jikanMutex        sync.Mutex
 	lastJikanRequest  time.Time
 	httpClient        = &http.Client{Timeout: 120 * time.Second}
-	downloadClient    = &http.Client{Timeout: 0} // No timeout for downloads
+	downloadClient    = &http.Client{Timeout: 0}
 	metadataCachePath string
 )
 
-// AnimeService handles anime fetching and streaming interactions
 type AnimeService struct {
 	ctx          context.Context
 	client       *goanime.Client
@@ -35,20 +34,17 @@ type AnimeService struct {
 	proxyMutex   sync.RWMutex
 	cacheDir     string
 	downloadsDir string
-	// New fields for advanced downloads
-	progressMap sync.Map // map[string]int (percentage)
-	cancelFuncs map[string]context.CancelFunc
-	cancelMutex sync.RWMutex
+	progressMap  sync.Map
+	cancelFuncs  map[string]context.CancelFunc
+	cancelMutex  sync.RWMutex
 }
 
-// NewAnimeService creates a new AnimeService
 func NewAnimeService() *AnimeService {
 	homeDir, _ := os.UserHomeDir()
 	appDataDir := filepath.Join(homeDir, "AppData", "Roaming", "goanime")
 	cacheDir := filepath.Join(appDataDir, "cache")
 	downloadsDir := filepath.Join(appDataDir, "downloads")
 
-	// Ensure directories exist
 	os.MkdirAll(cacheDir, 0755)
 	os.MkdirAll(downloadsDir, 0755)
 
@@ -64,7 +60,6 @@ func NewAnimeService() *AnimeService {
 	}
 }
 
-// GetDubbedAnime searches for the dubbed (or subbed) version of the current anime
 func (a *AnimeService) GetDubbedAnime(currentName string) (*Anime, error) {
 	fmt.Printf("[DubCheck] Searching for alternate version of: %s\n", currentName)
 
@@ -84,7 +79,6 @@ func (a *AnimeService) GetDubbedAnime(currentName string) (*Anime, error) {
 		return nil, err
 	}
 
-	// Filter by HasDub and find the best match
 	var bestMatch *Anime
 	bestScore := -1
 
@@ -94,22 +88,17 @@ func (a *AnimeService) GetDubbedAnime(currentName string) (*Anime, error) {
 			continue
 		}
 
-		// Use calculateSimilarity for a more robust base score
 		score := calculateSimilarity(baseName, res.Name)
-
-		// Stricter penalties for version mismatch:
-		// Penalize if it contains metadata keywords that the base doesn't have
 		resNameLower := strings.ToLower(res.Name)
 		normalizedBaseLower := strings.ToLower(baseName)
 
 		keywords := []string{"recap", "special", "part", "movie", "ova", "ona", "preview", "theatrical", "season 2", "season 3", "2nd season", "3rd season"}
 		for _, kw := range keywords {
 			if strings.Contains(resNameLower, kw) && !strings.Contains(normalizedBaseLower, kw) {
-				score -= 40 // Heavier penalty
+				score -= 40
 			}
 		}
 
-		// Specific penalty for asterisk sequel symbols if not in base
 		if strings.Contains(resNameLower, "*") && !strings.Contains(normalizedBaseLower, "*") {
 			score -= 30
 		}
@@ -130,7 +119,6 @@ func (a *AnimeService) GetDubbedAnime(currentName string) (*Anime, error) {
 	return bestMatch, nil
 }
 
-// startup is called at application startup
 func (a *AnimeService) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.loadCache()
@@ -138,11 +126,9 @@ func (a *AnimeService) startup(ctx context.Context) {
 	fmt.Println("AnimeService initialized")
 }
 
-// GetEpisodes fetches episodes for the given anime. If isDub is true, it attempts to find the dubbed version URL first.
 func (a *AnimeService) GetEpisodes(name, animeURL string, animeID int, sourceStr string, isDub bool) ([]Episode, error) {
 	fmt.Printf("[GetEpisodes] name: %s, url: %s, source: %s, isDub: %v\n", name, animeURL, sourceStr, isDub)
 
-	// Parse source
 	source, err := types.ParseSource(sourceStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid source: [%s]", sourceStr)
@@ -150,14 +136,12 @@ func (a *AnimeService) GetEpisodes(name, animeURL string, animeID int, sourceStr
 
 	targetURL := animeURL
 
-	// Optimization for AllAnime: Try suffixing current URL first
 	if isDub && source == types.SourceAllAnime && !strings.HasSuffix(animeURL, ":dub") {
 		testURL := animeURL + ":dub"
 		fmt.Printf("[DubCheck] Trying suffix-first for AllAnime: %s\n", testURL)
 		eps, err := a.client.GetAnimeEpisodes(testURL, source)
 		if err == nil && len(eps) > 0 {
 			fmt.Printf("[DubCheck] Success! Suffix-first returned %d episodes\n", len(eps))
-			// Map to local Episode struct and return immediately
 			var episodes []Episode
 			for _, ep := range eps {
 				episodes = append(episodes, Episode{
@@ -167,34 +151,27 @@ func (a *AnimeService) GetEpisodes(name, animeURL string, animeID int, sourceStr
 			}
 			return episodes, nil
 		}
-		fmt.Printf("[DubCheck] Suffix-first failed or returned 0 episodes, falling back to search...\n")
 	}
 
-	// Lazy load dub URL if requested via search
 	if isDub && !strings.HasSuffix(animeURL, ":dub") {
 		fmt.Printf("[DubCheck] Resolving dubbed version via search for: %s\n", name)
 		dubAnime, err := a.GetDubbedAnime(name)
 		if err == nil && dubAnime != nil {
 			fmt.Printf("[DubCheck] Resolved dubbed URL: %s\n", dubAnime.URL)
 			targetURL = dubAnime.URL
-		} else {
-			fmt.Printf("[DubCheck] No dubbed version found for: %s, using original URL with suffix\n", name)
 		}
 	}
 
-	// Special case for AllAnime: append :dub if not present when in dub mode (for the resolved targetURL)
 	if isDub && source == types.SourceAllAnime && !strings.HasSuffix(targetURL, ":dub") {
 		targetURL += ":dub"
 	}
 
-	// Fetch Episodes
 	rawEpisodes, err := a.client.GetAnimeEpisodes(targetURL, source)
 	if err != nil {
 		fmt.Printf("Error fetching episodes: %v\n", err)
 		return nil, err
 	}
 
-	// Map to local Episode struct
 	var episodes []Episode
 	for _, ep := range rawEpisodes {
 		episodes = append(episodes, Episode{
@@ -206,16 +183,12 @@ func (a *AnimeService) GetEpisodes(name, animeURL string, animeID int, sourceStr
 	return episodes, nil
 }
 
-// ClearCache wipes the temporary video cache
 func (a *AnimeService) ClearCache() {
 	fmt.Println("Clearing video cache...")
 	if err := os.RemoveAll(a.cacheDir); err != nil {
 		fmt.Printf("Failed to clear cache: %v\n", err)
 	}
-	// Re-create the directory immediately
-	if err := os.MkdirAll(a.cacheDir, 0755); err != nil {
-		fmt.Printf("Failed to recreate cache dir: %v\n", err)
-	}
+	os.MkdirAll(a.cacheDir, 0755)
 }
 
 func (a *AnimeService) loadCache() {
@@ -231,7 +204,6 @@ func (a *AnimeService) loadCache() {
 	}
 
 	if len(data) == 0 {
-		fmt.Println("Cache file is empty, starting fresh.")
 		return
 	}
 
@@ -257,6 +229,7 @@ func (a *AnimeService) saveCache() {
 		fmt.Printf("Error saving cache: %v\n", err)
 	}
 }
+
 func (a *AnimeService) LogProxyEvent(message string) {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "proxy:log", message)
