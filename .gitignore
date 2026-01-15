@@ -1,0 +1,42 @@
+# Binaries
+bin/
+build/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Wails
+frontend/wailsjs/
+frontend/dist/
+wails.json.backup
+
+# Node / Frontend
+node_modules/
+dist/
+.env*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Go
+vendor/
+*.test
+*.out
+go.work.sum
+
+# Local App Data / Cache
+metadata_cache.json
+AppData/
+cache/
+downloads/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db

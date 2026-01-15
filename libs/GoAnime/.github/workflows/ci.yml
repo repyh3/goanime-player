@@ -1,0 +1,76 @@
+name: GoAnime CI
+
+on:
+  push:
+    branches: [ main, dev, ipc ]
+  pull_request:
+    branches: [ main, dev, ipc ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        go-version: [ '1.25.x' ]
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          check-latest: true
+
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y mpv
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install mpv -y
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv
+
+      - name: Run macOS Socket Tests (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          echo "=== Testing macOS-specific socket path handling ==="
+          echo "TMPDIR=$TMPDIR"
+          go test -v ./internal/player/test/... -run "Socket|MacOS" -count=1
+
+      - name: Get dependencies
+        run: go get -v -t -d ./...
+
+      - name: Install golangci-lint (built with runner Go)
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
+      - name: Run golangci-lint
+        run: golangci-lint run --timeout=5m ./...
+
+      - name: Install Gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run Gosec Security Scanner
+        run: gosec ./...
+
+      - name: Run tests
+        shell: bash
+        run: go test -v -coverprofile=coverage.out ./...
