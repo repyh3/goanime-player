@@ -5,7 +5,7 @@
 A desktop application for streaming and downloading anime, built with Wails (Go), React, and HLS. It features a unified search interface, intelligent metadata matching, and proximity-based proxy for efficient streaming.
 
 > [!CAUTION]
-> This software is for educational purposes only. I do not take AND will not any responsibility for copyright infringement or misuse of the application. Users are responsible for complying with the terms of service of any third-party providers accessed via this software.
+> This software is for educational purposes only. I do not take any responsibility for copyright infringement or misuse of the application. Users are responsible for complying with the terms of service of any third-party providers accessed via this software.
 
 ## Screenshots
 
